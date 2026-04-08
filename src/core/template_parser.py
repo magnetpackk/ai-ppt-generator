@@ -100,16 +100,16 @@ class TemplateParser:
                 # 简单提取，实际需要更复杂的处理
                 theme.color_scheme = []
                 for shape in master.shapes:
-                    if shape.fill:
-                        try:
+                    try:
+                        if hasattr(shape, 'fill') and shape.fill:
                             color = shape.fill.fore_color
                             if color.type == "rgb":
                                 rgb = color.rgb
                                 if rgb:
                                     hex_color = f"#{rgb}"
                                     theme.color_scheme.append(hex_color)
-                        except Exception:
-                            pass
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -212,17 +212,21 @@ class TemplateParser:
             )
 
         # 判断是否是图片占位框（空的矩形）
-        if not shape.has_text_frame and shape.fill is None or shape.fill.type is None:
-            # 空矩形很可能是图片占位
-            if w > h * 1.2 or h > w * 1.2:  # 明显的图片比例
-                return Placeholder(
-                    shape_id=shape_id,
-                    type="image",
-                    x=round(x, 2),
-                    y=round(y, 2),
-                    width=round(w, 2),
-                    height=round(h, 2),
-                )
+        try:
+            if not shape.has_text_frame and (shape.fill is None or (hasattr(shape, 'fill') and shape.fill.type is None)):
+                # 空矩形很可能是图片占位
+                if w > h * 1.2 or h > w * 1.2:  # 明显的图片比例
+                    return Placeholder(
+                        shape_id=shape_id,
+                        type="image",
+                        x=round(x, 2),
+                        y=round(y, 2),
+                        width=round(w, 2),
+                        height=round(h, 2),
+                    )
+        except AttributeError:
+            # GroupShape 等特殊形状可能没有 fill 属性，直接跳过
+            pass
 
         return None
 
