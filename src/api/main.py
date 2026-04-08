@@ -15,12 +15,13 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import sys
-sys.path.append('..')
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.template_parser import TemplateParser, TemplateStructure
-from core.content_organizer import ContentOrganizer, ContentPlan
-from core.image_handler import ImageHandler
-from core.ppt_compositor import PPTCompositor
+from src.core.template_parser import TemplateParser, TemplateStructure
+from src.core.content_organizer import ContentOrganizer, ContentPlan
+from src.core.image_handler import ImageHandler
+from src.core.ppt_compositor import PPTCompositor
 
 
 app = FastAPI(
