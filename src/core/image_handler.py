@@ -2,6 +2,7 @@
 """
 模块三：ImageHandler - 图片处理
 按优先级处理图片需求：用户已有 → 联网搜索 → AI生成
+支持多种搜索提供商：Bing、Tavily、博查
 """
 
 import os
@@ -42,11 +43,17 @@ class ImageHandler:
 
     def __init__(
         self,
+        image_provider: str = "none",
         bing_search_key: Optional[str] = None,
+        tavily_api_key: Optional[str] = None,
+        bocha_api_key: Optional[str] = None,
         openai_api_key: Optional[str] = None,
         openai_base_url: Optional[str] = None,
     ):
+        self.image_provider = image_provider
         self.bing_search_key = bing_search_key
+        self.tavily_api_key = tavily_api_key
+        self.bocha_api_key = bocha_api_key
         self.openai_api_key = openai_api_key
         if openai_api_key:
             self.openai_client = openai.OpenAI(
@@ -78,11 +85,20 @@ class ImageHandler:
                 source="user",
             )
 
-        # 优先级 2: 联网搜索
-        if req.priority == "search" and self.bing_search_key:
-            search_result = self._search_image(req)
-            if search_result.success:
-                return search_result
+        # 优先级 2: 联网搜索（使用用户选择的提供商）
+        if req.priority == "search":
+            if self.image_provider == "bing" and self.bing_search_key:
+                search_result = self._search_bing(req)
+                if search_result.success:
+                    return search_result
+            elif self.image_provider == "tavily" and self.tavily_api_key:
+                search_result = self._search_tavily(req)
+                if search_result.success:
+                    return search_result
+            elif self.image_provider == "bocha" and self.bocha_api_key:
+                search_result = self._search_bocha(req)
+                if search_result.success:
+                    return search_result
 
         # 优先级 3: AI 生成
         if req.priority == "generate" and self.openai_client:
@@ -95,10 +111,10 @@ class ImageHandler:
             slide_index=req.slide_index,
             placeholder_id=req.placeholder_id,
             success=False,
-            error="All methods failed",
+            error=f"All methods failed. provider={self.image_provider}",
         )
 
-    def _search_image(self, req: ImageRequest) -> ImageResult:
+    def _search_bing(self, req: ImageRequest) -> ImageResult:
         """必应图片搜索"""
         if not self.bing_search_key:
             return ImageResult(
@@ -155,6 +171,127 @@ class ImageHandler:
                 error=f"Search failed: {str(e)}",
             )
 
+    def _search_tavily(self, req: ImageRequest) -> ImageResult:
+        """Tavily 搜索图片"""
+        if not self.tavily_api_key:
+            return ImageResult(
+                slide_index=req.slide_index,
+                placeholder_id=req.placeholder_id,
+                success=False,
+                error="Tavily API key not configured",
+            )
+
+        query = " ".join(req.keywords)
+        url = "https://api.tavily.com/search"
+        headers = {
+            "Authorization": f"Bearer {self.tavily_api_key}",
+            "Content-Type": "application/json",
+        }
+        data = {
+            "query": query,
+            "search_depth": "basic",
+            "include_images": True,
+            "max_results": 5,
+        }
+
+        try:
+            response = requests.post(url, json=data, headers=headers, timeout=15)
+            response.raise_for_status()
+            result = response.json()
+
+            if "images" in result and len(result["images"]) > 0:
+                # 取第一张图片
+                first_image = result["images"][0]
+                image_url = first_image.get("url", "")
+                if image_url:
+                    # 下载图片
+                    img_response = requests.get(image_url, timeout=10)
+                    if img_response.status_code == 200:
+                        return ImageResult(
+                            slide_index=req.slide_index,
+                            placeholder_id=req.placeholder_id,
+                            success=True,
+                            image_url=image_url,
+                            image_data=img_response.content,
+                            source="search",
+                        )
+
+            return ImageResult(
+                slide_index=req.slide_index,
+                placeholder_id=req.placeholder_id,
+                success=False,
+                error="No image results from Tavily",
+            )
+
+        except Exception as e:
+            return ImageResult(
+                slide_index=req.slide_index,
+                placeholder_id=req.placeholder_id,
+                success=False,
+                error=f"Tavily search failed: {str(e)}",
+            )
+
+    def _search_bocha(self, req: ImageRequest) -> ImageResult:
+        """博查 AI 搜索图片"""
+        if not self.bocha_api_key:
+            return ImageResult(
+                slide_index=req.slide_index,
+                placeholder_id=req.placeholder_id,
+                success=False,
+                error="Bocha API key not configured",
+            )
+
+        query = " ".join(req.keywords)
+        url = "https://api.bocha.cn/v1/web-search"
+        headers = {
+            "Authorization": f"Bearer {self.bocha_api_key}",
+            "Content-Type": "application/json",
+        }
+        data = {
+            "query": query,
+            "enable": True,
+            "withContent": False,
+        }
+
+        try:
+            response = requests.post(url, json=data, headers=headers, timeout=15)
+            response.raise_for_status()
+            result = response.json()
+
+            # 博搜索返回结果中查找图片
+            # 如果没有直接图片链接，尝试从搜索结果中提取
+            import re
+            result_str = json.dumps(result)
+            # 查找http(s)链接结尾常见图片格式
+            image_urls = re.findall(r'https?://[^\s]+?\.(jpg|jpeg|png|gif|webp)', result_str, re.IGNORECASE)
+            if image_urls:
+                image_url = image_urls[0]
+                img_response = requests.get(image_url, timeout=10)
+                if img_response.status_code == 200:
+                    return ImageResult(
+                        slide_index=req.slide_index,
+                        placeholder_id=req.placeholder_id,
+                        success=True,
+                        image_url=image_url,
+                        image_data=img_response.content,
+                        source="search",
+                    )
+
+            return ImageResult(
+                slide_index=req.slide_index,
+                placeholder_id=req.placeholder_id,
+                success=False,
+                error="No image results from Bocha",
+            )
+
+        except Exception as e:
+            return ImageResult(
+                slide_index=req.slide_index,
+                placeholder_id=req.placeholder_id,
+                success=False,
+                error=f"Bocha search failed: {str(e)}",
+            )
+
     def _generate_image(self, req: ImageRequest) -> ImageResult:
         """DALL·E 生成图片"""
         if not self.openai_client:
@@ -191,7 +328,7 @@ class ImageHandler:
             if response.data and len(response.data) > 0:
                 image_url = response.data[0].url
                 # 下载图片
-                img_response =requests.get(image_url, timeout=30)
+                img_response = requests.get(image_url, timeout=30)
                 if img_response.status_code == 200:
                     return ImageResult(
                         slide_index=req.slide_index,

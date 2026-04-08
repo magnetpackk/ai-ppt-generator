@@ -32,7 +32,7 @@ from docx import Document as DocxDocument
 app = FastAPI(
     title="AI PPT Generator",
     description="基于模板的AI PPT生成器，双输入：模板+资料，自动填充内容",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 
@@ -41,7 +41,10 @@ user_config = {
     "openai_api_key": os.getenv("OPENAI_API_KEY", ""),
     "openai_base_url": os.getenv("OPENAI_BASE_URL", ""),
     "openai_model": "gpt-4o",
+    "image_search_provider": "none",
     "bing_search_key": os.getenv("BING_SEARCH_KEY", ""),
+    "tavily_api_key": os.getenv("TAVILY_API_KEY", ""),
+    "bocha_api_key": os.getenv("BOCHA_API_KEY", ""),
 }
 
 
@@ -248,9 +251,27 @@ INDEX_HTML = """
                 </select>
             </div>
             <div class="form-group">
-                <label for="bing_search_key">Bing Search API Key (可选，用于搜索图片)</label>
+                <label for="image_search_provider">图片搜索服务 (可选)</label>
+                <select id="image_search_provider">
+                    <option value="none" selected>不搜索图片</option>
+                    <option value="bing">Bing Image Search</option>
+                    <option value="tavily">Tavily AI Search</option>
+                    <option value="bocha">博查 AI Search</option>
+                </select>
+                <p class="help-text">选择图片搜索服务，搜索到的图片会自动插入PPT对应位置</p>
+            </div>
+            <div class="form-group" id="bing_key_group">
+                <label for="bing_search_key">Bing Search API Key</label>
                 <input type="password" id="bing_search_key" placeholder="" value="">
-                <p class="help-text">不填则不搜索图片</p>
+            </div>
+            <div class="form-group" id="tavily_key_group">
+                <label for="tavily_api_key">Tavily API Key</label>
+                <input type="password" id="tavily_api_key" placeholder="" value="">
+            </div>
+            <div class="form-group" id="bocha_key_group">
+                <label for="bocha_api_key">博查 API Key</label>
+                <input type="password" id="bocha_api_key" placeholder="" value="">
+                <p class="help-text">API endpoint: https://api.bocha.cn/v1/web-search</p>
             </div>
             <div class="center">
                 <button class="btn btn-primary" onclick="saveConfig()">保存配置</button>
@@ -305,6 +326,21 @@ INDEX_HTML = """
     </div>
 
 <script>
+    // 显示隐藏对应的API Key输入框
+    function updateKeyVisibility() {
+        const provider = document.getElementById('image_search_provider').value;
+        document.getElementById('bing_key_group').style.display = provider === 'bing' ? 'block' : 'none';
+        document.getElementById('tavily_key_group').style.display = provider === 'tavily' ? 'block' : 'none';
+        document.getElementById('bocha_key_group').style.display = provider === 'bocha' ? 'block' : 'none';
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        if (document.getElementById('image_search_provider')) {
+            document.getElementById('image_search_provider').addEventListener('change', updateKeyVisibility);
+            updateKeyVisibility();
+        }
+    });
+
     // 初始化
     function switchTab(tabName) {
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -338,7 +374,10 @@ INDEX_HTML = """
             openai_api_key: document.getElementById('openai_api_key').value,
             openai_base_url: document.getElementById('openai_base_url').value,
             openai_model: document.getElementById('openai_model').value,
+            image_search_provider: document.getElementById('image_search_provider').value,
             bing_search_key: document.getElementById('bing_search_key').value,
+            tavily_api_key: document.getElementById('tavily_api_key').value,
+            bocha_api_key: document.getElementById('bocha_api_key').value,
         };
         fetch('/api/save-config', {
             method: 'POST',
@@ -384,6 +423,7 @@ INDEX_HTML = """
         })
         .then(async response => {
             clearInterval(progressInterval);
+            document.getElementById('progress_fill').style.width = '100%%%
             document.getElementById('progress_fill').style.width = '100%';
             if (!response.ok) {
                 const err = await response.text();
@@ -422,9 +462,19 @@ INDEX_HTML = """
             if (data.openai_model) {
                 document.getElementById('openai_model').value = data.openai_model;
             }
+            if (data.image_search_provider) {
+                document.getElementById('image_search_provider').value = data.image_search_provider;
+            }
             if (data.bing_search_key) {
                 document.getElementById('bing_search_key').value = data.bing_search_key;
             }
+            if (data.tavily_api_key) {
+                document.getElementById('tavily_api_key').value = data.tavily_api_key;
+            }
+            if (data.bocha_api_key) {
+                document.getElementById('bocha_api_key').value = data.bocha_api_key;
+            }
+            updateKeyVisibility();
         });
 </script>
 </body>
@@ -474,7 +524,10 @@ def get_config():
         "openai_api_key": user_config.get('openai_api_key', ''),
         "openai_base_url": user_config.get('openai_base_url', ''),
         "openai_model": user_config.get('openai_model', 'gpt-4o'),
+        "image_search_provider": user_config.get('image_search_provider', 'none'),
         "bing_search_key": user_config.get('bing_search_key', ''),
+        "tavily_api_key": user_config.get('tavily_api_key', ''),
+        "bocha_api_key": user_config.get('bocha_api_key', ''),
     }
 
 
@@ -482,7 +535,10 @@ class SaveConfigRequest(BaseModel):
     openai_api_key: Optional[str] = None
     openai_base_url: Optional[str] = None
     openai_model: Optional[str] = None
+    image_search_provider: Optional[str] = None
     bing_search_key: Optional[str] = None
+    tavily_api_key: Optional[str] = None
+    bocha_api_key: Optional[str] = None
 
 
 @app.post("/api/save-config")
@@ -495,8 +551,14 @@ def save_config(req: SaveConfigRequest):
             user_config['openai_base_url'] = req.openai_base_url
         if req.openai_model is not None:
             user_config['openai_model'] = req.openai_model
+        if req.image_search_provider is not None:
+            user_config['image_search_provider'] = req.image_search_provider
         if req.bing_search_key is not None:
             user_config['bing_search_key'] = req.bing_search_key
+        if req.tavily_api_key is not None:
+            user_config['tavily_api_key'] = req.tavily_api_key
+        if req.bocha_api_key is not None:
+            user_config['bocha_api_key'] = req.bocha_api_key
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -508,26 +570,26 @@ async def generate_full(
     source: UploadFile = File(...),
 ):
     """端到端完整生成PPT"""
-    
+
     # 检查配置
     if not user_config['openai_api_key']:
         raise HTTPException(status_code=400, detail="请先在配置页填写OpenAI API Key")
-    
+
     try:
         # 1. 读取模板
         template_content = await template.read()
         if not template.filename.endswith('.pptx'):
             raise HTTPException(status_code=400, detail="模板必须是 .pptx 文件")
-        
+
         # 2. 读取并提取资料文本
         source_content = await source.read()
         source_text = extract_text_from_file(source.filename, source_content)
-        
+
         if len(source_text.strip()) == 0:
             raise HTTPException(status_code=400, detail="未能从资料文件提取到文本")
-        
+
         base_url = user_config['openai_base_url'] if user_config['openai_base_url'] else None
-        
+
         # 3. 解析模板结构
         template_io = BytesIO(template_content)
         parser = TemplateParser(
@@ -535,28 +597,32 @@ async def generate_full(
             openai_base_url=base_url,
             model=user_config['openai_model'],
         )
-        
+
         template_structure = parser.parse(template_io)
-        
+
         # 4. 整理内容
         organizer = ContentOrganizer(
             openai_api_key=user_config['openai_api_key'],
             openai_base_url=base_url,
             model=user_config['openai_model'],
         )
-        
+
         content_plan = organizer.organize(source_text, template_structure)
-        
-        # 5. 处理图片需求
+
+        # 5. 处理图片需求 - 根据选择的provider
+        provider = user_config.get('image_search_provider', 'none')
         image_handler = ImageHandler(
+            image_provider=provider,
             bing_search_key=user_config.get('bing_search_key'),
+            tavily_api_key=user_config.get('tavily_api_key'),
+            bocha_api_key=user_config.get('bocha_api_key'),
             openai_api_key=user_config['openai_api_key'] if content_plan.image_requests else None,
             openai_base_url=base_url,
         )
         image_results = []
-        if content_plan.image_requests:
+        if provider != 'none' and content_plan.image_requests:
             image_results = image_handler.process_all(content_plan.image_requests)
-        
+
         # 6. 合成最终PPT
         compositor = PPTCompositor()
         output_io = compositor.compose(
@@ -566,24 +632,24 @@ async def generate_full(
             image_results,
         )
         output_io.seek(0)
-        
+
         # 7. 返回文件下载
         output_bytes = output_io.getvalue()
-        
+
         # 保存到临时文件返回
         import tempfile
         temp_file = tempfile.NamedTemporaryFile(suffix='.pptx', delete=False)
         temp_file.write(output_bytes)
         temp_file.close()
-        
+
         download_name = template.filename.replace('.pptx', '_generated.pptx') if template.filename else 'generated.pptx'
-        
+
         return FileResponse(
             temp_file.name,
             media_type='application/vnd.openxmlformats-officedocument.presentationml.presentation',
             filename=download_name,
         )
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
