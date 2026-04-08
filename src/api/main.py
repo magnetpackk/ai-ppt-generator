@@ -243,12 +243,8 @@ INDEX_HTML = """
             </div>
             <div class="form-group">
                 <label for="openai_model">AI 模型</label>
-                <select id="openai_model">
-                    <option value="gpt-4o" selected>gpt-4o (推荐)</option>
-                    <option value="gpt-4-turbo">gpt-4-turbo</option>
-                    <option value="gpt-4">gpt-4</option>
-                    <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
-                </select>
+                <input type="text" id="openai_model" placeholder="gpt-4o" value="gpt-4o">
+                <p class="help-text">直接填写模型名称，例如 gpt-4o, gpt-4, claude-3-opus 等</p>
             </div>
             <div class="form-group">
                 <label for="image_search_provider">图片搜索服务 (可选)</label>
@@ -423,7 +419,6 @@ INDEX_HTML = """
         })
         .then(async response => {
             clearInterval(progressInterval);
-            document.getElementById('progress_fill').style.width = '100%%%
             document.getElementById('progress_fill').style.width = '100%';
             if (!response.ok) {
                 const err = await response.text();

@@ -15,16 +15,15 @@ from .template_parser import TemplateStructure, SlideInfo
 @dataclass
 class ContentPage:
     """单页内容"""
-    slide_index: int
-    page_type: str
+    template_page_type: str
     content: str
 
 
 @dataclass
 class DataBlock:
     """数据块"""
-    slide_index: int
-    placeholder_id: int
+    template_page_type: str
+    placeholder_type: str
     raw_data: str
     structured_data: Any
     recommended_type: str  # table | bar | line | pie | scatter
@@ -34,11 +33,13 @@ class DataBlock:
 @dataclass
 class ImageRequest:
     """图片需求"""
-    slide_index: int
-    placeholder_id: int
+    template_page_type: str
+    placeholder_type: str
     keywords: List[str]
     priority: str  # user-provided | search | generate
     description: str
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 
 @dataclass
@@ -77,8 +78,9 @@ class ContentOrganizer:
                 {
                     "role": "system",
                     "content": (
-                        "你是PPT内容整理专家。请根据用户提供的资料和PPT模板结构，"
-                        "把内容整理分配到对应页面，输出JSON格式。"
+                        "你是PPT内容整理专家。请根据用户提供的资料和PPT模板库，"
+                        "把内容整理规划成完整PPT，输出JSON格式。"
+                        "模板库提供了不同类型的页面模板，你根据内容决定需要多少页，选择对应类型的模板。"
                     )
                 },
                 {"role": "user", "content": prompt},
@@ -93,41 +95,47 @@ class ContentOrganizer:
         import json
         try:
             data = json.loads(result_text)
-            return self._parse_ai_output(data, template_structure)
+            return self._parse_ai_output(data)
         except Exception as e:
             raise ValueError(f"Failed to parse AI output: {e}")
 
     def _build_organize_prompt(self, source_text: str, template_structure: TemplateStructure) -> str:
         """构建整理prompt"""
 
-        template_info = "模板结构:\n"
-        for slide in template_structure.slides:
-            placeholders = [f"  - {p.type}占位 (id={p.shape_id})" for p in slide.placeholders]
-            template_info += f"页面 {slide.index} 类型={slide.page_type}:\n" + "\n".join(placeholders) + "\n\n"
+        # 统计模板库中每种类型有多少页
+        template_types: Dict[str, int] = {}
+        template_details = ""
+        for idx, slide in enumerate(template_structure.slides):
+            slide_type = slide.page_type
+            template_types[slide_type] = template_types.get(slide_type, 0) + 1
+            placeholders = [f"  - {p.type}占位 (estimated text length={p.expected_text_length})" for p in slide.placeholders]
+            template_details += f"- 模板页 #{idx} 类型={slide.page_type}:\n" + "\n".join(placeholders) + "\n\n"
 
         return f"""请帮我整理这份PPT内容：
 
 ## 原始资料
 {source_text[:8000]}  # 限制长度
 
-## 模板结构
-{template_info}
+## 模板库
+模板提供了不同类型的页面，你可以根据内容需要选择使用：
+{template_details}
 
 ## 要求
+**请根据资料内容，决定PPT总共需要多少页，然后从模板库中选择对应类型的页面来容纳内容。**
+
 请按以下JSON格式输出：
 
 {{
   "pages": [
     {{
-      "slide_index": 页面索引,
-      "page_type": "页面类型",
-      "content": "整理后适合放在这页的文字内容"
+      "template_page_type": "选择使用的页面类型: cover/toc/title/content/section/blank",
+      "content": "整理后适合放在这页的文字内容，如果是目录需要每一项占一行"
     }}
   ],
   "data_blocks": [
     {{
-      "slide_index": 页面索引,
-      "placeholder_id": 占位id,
+      "template_page_type": "选择使用的页面类型",
+      "placeholder_type": "占位类型 text/chart/table",
       "raw_data": "原始数据文本",
       "recommended_type": "推荐可视化类型 table|bar|line|pie",
       "title": "数据标题"
@@ -135,8 +143,8 @@ class ContentOrganizer:
   ],
   "image_requests": [
     {{
-      "slide_index": 页面索引,
-      "placeholder_id": 占位id,
+      "template_page_type": "选择使用的页面类型",
+      "placeholder_type": "image",
       "keywords": ["关键词1", "关键词2"],
       "priority": "search" 或 "generate",
       "description": "图片描述"
@@ -144,29 +152,30 @@ class ContentOrganizer:
   ]
 }}
 
-规则：
-1. 内容必须匹配模板页面数量和类型，封面放标题，目录页放目录
-2. 识别出表格数据和图表数据，给出推荐可视化类型
-3. 需要图片的位置生成图片需求，有明确关键词就search，需要示意图就generate
-4. 文字要简洁适合PPT，不要大段文字
+核心规则：
+1. **根据资料内容自由决定页数**，不要受模板原有页数限制。模板只是给你提供不同类型的页面样式，你决定需要多少页就生成多少页。
+2. **合理分配内容到占位符**：如果一个页面模板有多个文本占位符（比如目录页每个目录项一个占位），一定要把内容拆分到对应的占位符，不要把所有内容都挤到第一个占位符。
+3. **保持排版美观**：目录应该每个目录项单独放一个占位，如果内容超过占位符数量，保持纵向分行排列，左对齐。
+4. 识别出表格数据和图表数据，给出推荐可视化类型
+5. 需要图片的位置生成图片需求，有明确关键词就search，需要示意图就generate
+6. 文字要简洁适合PPT，不要大段文字
 """
 
-    def _parse_ai_output(self, data: dict, template_structure: TemplateStructure) -> ContentPlan:
+    def _parse_ai_output(self, data: dict) -> ContentPlan:
         """解析AI输出"""
 
         pages: List[ContentPage] = []
         for p in data.get("pages", []):
             pages.append(ContentPage(
-                slide_index=int(p.get("slide_index", 0)),
-                page_type=p.get("page_type", "content"),
+                template_page_type=p.get("template_page_type", "content"),
                 content=p.get("content", ""),
             ))
 
         data_blocks: List[DataBlock] = []
         for db in data.get("data_blocks", []):
             data_blocks.append(DataBlock(
-                slide_index=int(db.get("slide_index", 0)),
-                placeholder_id=int(db.get("placeholder_id", 0)),
+                template_page_type=db.get("template_page_type", "content"),
+                placeholder_type=db.get("placeholder_type", "text"),
                 raw_data=db.get("raw_data", ""),
                 structured_data=db.get("structured_data", None),
                 recommended_type=db.get("recommended_type", "table"),
@@ -176,31 +185,15 @@ class ContentOrganizer:
         image_requests: List[ImageRequest] = []
         for ir in data.get("image_requests", []):
             image_requests.append(ImageRequest(
-                slide_index=int(ir.get("slide_index", 0)),
-                placeholder_id=int(ir.get("placeholder_id", 0)),
+                template_page_type=ir.get("template_page_type", "content"),
+                placeholder_type=ir.get("placeholder_type", "image"),
                 keywords=ir.get("keywords", []),
                 priority=ir.get("priority", "search"),
                 description=ir.get("description", ""),
             ))
 
-        # 对齐模板，确保每个页面都有内容
-        result_pages = []
-        template_slide_indexes = [s.index for s in template_structure.slides]
-        # 先加AI生成的
-        for page in pages:
-            if page.slide_index in template_slide_indexes:
-                result_pages.append(page)
-        # 补全缺失的
-        for slide in template_structure.slides:
-            if not any(p.slide_index == slide.index for p in result_pages):
-                result_pages.append(ContentPage(
-                    slide_index=slide.index,
-                    page_type=slide.page_type,
-                    content="",
-                ))
-
         return ContentPlan(
-            pages=result_pages,
+            pages=pages,
             data_blocks=data_blocks,
             image_requests=image_requests,
         )
