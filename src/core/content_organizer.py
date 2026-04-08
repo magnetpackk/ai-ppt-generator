@@ -52,7 +52,10 @@ class ContentPlan:
 class ContentOrganizer:
     """内容整理器"""
 
-    def __init__(self, openai_api_key: str, openai_base_url: Optional[str] = None):
+    def __init__(self, openai_api_key: str, openai_base_url: Optional[str] = None, model: str = "gpt-4o"):
+        self.openai_api_key = openai_api_key
+        self.openai_base_url = openai_base_url
+        self.model = model
         self.client = openai.OpenAI(
             api_key=openai_api_key,
             base_url=openai_base_url,
@@ -69,7 +72,7 @@ class ContentOrganizer:
         prompt = self._build_organize_prompt(source_text, template_structure)
 
         response = self.client.chat.completions.create(
-            model="gpt-4o",
+            model=self.model,
             messages=[
                 {
                     "role": "system",
