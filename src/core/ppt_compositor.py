@@ -73,7 +73,7 @@ class PPTCompositor:
 
         # 输出
         output_final = BytesIO()
-       prs.save(output_final)
+        prs.save(output_final)
         output_final.seek(0)
         return output_final
 
