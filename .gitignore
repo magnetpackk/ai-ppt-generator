@@ -42,3 +42,4 @@ output/
 temp/
 *.pptx
 memory/
+app.log

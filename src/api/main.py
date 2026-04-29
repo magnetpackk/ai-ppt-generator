@@ -11,18 +11,18 @@ from io import BytesIO
 from typing import Optional, Dict
 from datetime import datetime
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel, Field
-
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.core.template_parser import TemplateParser, TemplateStructure, SlideInfo
-from src.core.content_organizer import ContentOrganizer, ContentPlan
-from src.core.image_handler import ImageHandler
-from src.core.ppt_compositor import PPTCompositor
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse
+from pydantic import BaseModel, Field
+
+from core.template_parser import TemplateParser, TemplateStructure, SlideInfo
+from core.content_organizer import ContentOrganizer, ContentPlan
+from core.image_handler import ImageHandler
+from core.ppt_compositor import PPTCompositor
 
 # 文档解析
 from PyPDF2 import PdfReader
@@ -330,6 +330,14 @@ INDEX_HTML = """
         document.getElementById('bocha_key_group').style.display = provider === 'bocha' ? 'block' : 'none';
     }
 
+    // 默认就隐藏非选中的选项，解决DOM加载完成前都显示的问题
+    (function() {
+        const providerEl = document.getElementById('image_search_provider');
+        if (providerEl) {
+            updateKeyVisibility();
+        }
+    })();
+
     document.addEventListener('DOMContentLoaded', function() {
         if (document.getElementById('image_search_provider')) {
             document.getElementById('image_search_provider').addEventListener('change', updateKeyVisibility);
@@ -341,7 +349,11 @@ INDEX_HTML = """
     function switchTab(tabName) {
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
         document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-        event.target.classList.add('active');
+        if (window.event && window.event.target) {
+            window.event.target.classList.add('active');
+        } else {
+            document.querySelector(`button[onclick="switchTab('${tabName}')"]`).classList.add('active');
+        }
         document.getElementById(tabName + '-tab').classList.add('active');
     }
 
@@ -393,9 +405,22 @@ INDEX_HTML = """
         });
     }
 
+    function addLog(message) {
+        const logContent = document.getElementById('log_content');
+        const timestamp = new Date().toLocaleTimeString();
+        logContent.innerHTML += '[' + timestamp + '] ' + message + '\n';
+        logContent.scrollTop = logContent.scrollHeight;
+    }
+
     function generatePPT() {
         const templateFile = document.getElementById('template_file').files[0];
         const sourceFile = document.getElementById('source_file').files[0];
+
+        document.getElementById('logs').style.display = 'block';
+        document.getElementById('log_content').innerHTML = '';
+        addLog('🚀 开始生成PPT...');
+        addLog('📄 模板文件: ' + templateFile.name);
+        addLog('📄 资料文件: ' + sourceFile.name);
 
         const formData = new FormData();
         formData.append('template', templateFile);
@@ -413,6 +438,8 @@ INDEX_HTML = """
             document.getElementById('progress_fill').style.width = progress + '%';
         }, 500);
 
+        addLog('🔄 发送请求到服务器...');
+
         fetch('/api/generate-full', {
             method: 'POST',
             body: formData,
@@ -420,10 +447,13 @@ INDEX_HTML = """
         .then(async response => {
             clearInterval(progressInterval);
             document.getElementById('progress_fill').style.width = '100%';
+            addLog('📥 服务器开始处理...');
             if (!response.ok) {
                 const err = await response.text();
+                addLog('❌ 请求失败: ' + err);
                 throw new Error(err);
             }
+            addLog('✅ 生成完成，准备下载...');
             return response.blob();
         })
         .then(blob => {
@@ -434,12 +464,14 @@ INDEX_HTML = """
             downloadLink.href = url;
             downloadLink.download = templateFile.name.replace('.pptx', '_generated.pptx');
             document.getElementById('generate_btn').disabled = false;
+            addLog('✅ 下载已准备好!');
         })
         .catch(err => {
             clearInterval(progressInterval);
             document.getElementById('progress').style.display = 'none';
             document.getElementById('error_box').style.display = 'block';
             document.getElementById('error_box').textContent = '❌ 生成失败: ' + err.message;
+            addLog('❌ 生成失败: ' + err.message);
             document.getElementById('generate_btn').disabled = false;
         });
     }

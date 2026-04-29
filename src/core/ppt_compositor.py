@@ -38,13 +38,6 @@ class PPTCompositor:
 
         prs_original = Presentation(template_file)
 
-        # 创建新PPT，我们需要按content_plan的顺序复制对应类型的模板页面
-        prs = Presentation(template_file)
-        # 清空原有slides - 我们按内容需要重新添加
-        # python-pptx doesn't support delete slides cleanly, so we create new from scratch
-        # workaround: we filter and keep only matching pages
-        # Actually better approach: create new presentation and clone slides we need
-
         # 获取模板库中每种类型的可用页面
         template_type_map: Dict[str, List[SlideInfo]] = {}
         for slide_info in template_structure.slides:
@@ -52,21 +45,16 @@ class PPTCompositor:
                 template_type_map[slide_info.page_type] = []
             template_type_map[slide_info.page_type].append(slide_info)
 
-        # 我们需要从头构建PPT，因为python-pptx 不支持移除幻灯片
-        # 所以创建新的presentation对象，只复制我们需要的页面
+        # 保存原始presentation到output
         output = BytesIO()
         prs_original.save(output)
         output.seek(0)
 
         prs = Presentation(output)
-        # 移除所有原有幻灯片 - 通过创建新presentation只保留我们需要的
-        # python-pptx doesn't support remove slides well, so we rebuild slides manually
-        # workaround: we use the original presentation and add new slides after existing
-        # this works because we are adding not removing
 
-        # 现在，我们按content_plan顺序添加页面
+        # 按content_plan填充内容
         for content_page in content_plan.pages:
-            self._add_content_page(prs, content_page, template_type_map, template_structure)
+            self._fill_content_page(prs, content_page, template_type_map)
 
         # 插入图片
         self._insert_images(prs, content_plan, image_results, template_type_map)
@@ -77,50 +65,43 @@ class PPTCompositor:
         output_final.seek(0)
         return output_final
 
-    def _add_content_page(
+    def _fill_content_page(
         self,
         prs: Presentation,
         content_page: ContentPage,
         template_type_map: Dict[str, List[SlideInfo]],
-        template_structure: TemplateStructure,
     ):
-        """添加一页内容，从模板挑选对应类型"""
+        """填充一页内容，从模板找对应类型"""
 
         target_type = content_page.template_page_type
 
-        # 获取模板中对应类型的页面
+        # 获取模板中对应类型的页面，选第一个
         if target_type not in template_type_map or len(template_type_map[target_type]) == 0:
             # fallback to content type
             if "content" in template_type_map and len(template_type_map["content"]) > 0:
                 target_type = "content"
             else:
-                # if no matching type, use any available
+                # if no matching, use any available
                 if len(template_type_map) > 0:
                     target_type = next(iter(template_type_map.keys()))
 
-        # pick the first matching template slide
+        # pick the first template slide of this type
         template_slide_info = template_type_map[target_type][0]
 
-        # clone slide from original presentation
-        # get the slide from original presentation by its index
-        original_slide = None
+        # get the actual slide from presentation by its original index
+        target_slide = None
         for idx, slide in enumerate(prs.slides):
             if idx == template_slide_info.index:
-                original_slide = slide
+                target_slide = slide
                 break
 
-        if original_slide is None:
-            # can't find, skip
+        if target_slide is None:
             return
 
-        # python-pptx doesn't support cloning slides properly
-        # we have the slide already in presentation, we just fill content into it
-        # actually since we keep the original slide order but add content to it
-        # fill content directly
-        self._fill_slide_content(original_slide, content_page, template_slide_info)
+        self._fill_slide_content(target_slide, content_page, template_slide_info)
 
     def _fill_slide_content(self, slide, content_page: ContentPage, template_slide: SlideInfo):
-        """填充页面文字内容"""
+        """填充页面文字内容，分配到多个占位符"""
 
         if not content_page.content or not content_page.content.strip():
             return
@@ -128,8 +109,7 @@ class PPTCompositor:
         # 找到这页的文字占位
         text_placeholders = [p for p in template_slide.placeholders if p.type == "text"]
 
-        # 拆分内容，分配给多个占位符
-        # 如果内容中有空行分隔，按空行拆分
+        # 拆分内容，按空行分隔段落
         content_blocks = [block.strip() for block in content_page.content.split('\n\n') if block.strip()]
 
         if len(text_placeholders) == 0:
@@ -141,7 +121,7 @@ class PPTCompositor:
             self._fill_text_placeholder(slide, ph, content_page.content)
         else:
             # 多个占位，拆分内容分配
-            # 如果内容块比占位符多，把多余内容放到最后一个占位符
+            # 如果内容块比占位符少，剩下的保持原样
             for i, ph in enumerate(text_placeholders):
                 if i < len(content_blocks):
                     self._fill_text_placeholder(slide, ph, content_blocks[i])
@@ -162,7 +142,7 @@ class PPTCompositor:
                     p = text_frame.paragraphs[0]
                     p.text = content.strip()
 
-                    # 自动调整字号（简单策略）
+                    # 自动调整字号
                     self._auto_fit_font(shape, content)
                 break
 
@@ -199,9 +179,9 @@ class PPTCompositor:
             if not img_result.success or not img_result.image_data:
                 continue
 
-            # 找到对应类型的模板占位
+            # 找到对应类型的占位
             found_ph = None
-            found_slide_idx = None
+            found_slide_info = None
 
             # 遍历模板找到对应类型和占位
             for slide_type, slides in template_type_map.items():
@@ -210,7 +190,7 @@ class PPTCompositor:
                         for ph in slide_info.placeholders:
                             if ph.type == img_result.placeholder_type:
                                 found_ph = ph
-                                found_slide_idx = slide_info.index
+                                found_slide_info = slide_info
                                 break
                         if found_ph:
                             break
@@ -220,10 +200,15 @@ class PPTCompositor:
             if not found_ph:
                 continue
 
-            if found_slide_idx is None or found_slide_idx >= len(prs.slides):
-                continue
+            # 找到对应原始slide in presentation
+            found_slide = None
+            for idx, slide in enumerate(prs.slides):
+                if idx == found_slide_info.index:
+                    found_slide = slide
+                    break
 
-            slide = prs.slides[found_slide_idx]
+            if not found_slide:
+                continue
 
             # 转换位置（英寸 -> EMU）
             left = Emu(int(found_ph.x * 914400))
@@ -233,7 +218,7 @@ class PPTCompositor:
 
             # 插入图片
             try:
-                slide.shapes.add_picture(
+                found_slide.shapes.add_picture(
                     BytesIO(img_result.image_data),
                     left,
                     top,

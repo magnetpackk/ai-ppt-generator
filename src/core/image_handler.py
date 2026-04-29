@@ -11,26 +11,14 @@ import openai
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
 
-from .template_parser import Placeholder
-
-
-@dataclass
-class ImageRequest:
-    """图片需求"""
-    slide_index: int
-    placeholder_id: int
-    keywords: List[str]
-    priority: str  # user-provided | search | generate
-    description: str
-    width: Optional[int] = None
-    height: Optional[int] = None
+from .content_organizer import ImageRequest as ContentImageRequest
 
 
 @dataclass
 class ImageResult:
     """图片处理结果"""
-    slide_index: int
-    placeholder_id: int
+    template_page_type: str
+    placeholder_type: str
     success: bool
     image_url: Optional[str] = None
     image_data: Optional[bytes] = None
@@ -63,7 +51,7 @@ class ImageHandler:
         else:
             self.openai_client = None
 
-    def process_all(self, image_requests: List[ImageRequest]) -> List[ImageResult]:
+    def process_all(self, image_requests: List[ContentImageRequest]) -> List[ImageResult]:
         """处理所有图片需求"""
         results = []
         for req in image_requests:
@@ -71,7 +59,7 @@ class ImageHandler:
             results.append(result)
         return results
 
-    def process_one(self, req: ImageRequest) -> ImageResult:
+    def process_one(self, req: ContentImageRequest) -> ImageResult:
         """按照优先级处理单个图片需求"""
 
         # 优先级 1: 用户已有
@@ -79,8 +67,8 @@ class ImageHandler:
             # 用户已经提供图片，直接返回
             # 这里应该从用户上传资料中提取，上层处理
             return ImageResult(
-                slide_index=req.slide_index,
-                placeholder_id=req.placeholder_id,
+                template_page_type=req.template_page_type,
+                placeholder_type=req.placeholder_type,
                 success=True,
                 source="user",
             )
@@ -108,18 +96,18 @@ class ImageHandler:
 
         # 所有都失败
         return ImageResult(
-            slide_index=req.slide_index,
-            placeholder_id=req.placeholder_id,
+            template_page_type=req.template_page_type,
+            placeholder_type=req.placeholder_type,
             success=False,
             error=f"All methods failed. provider={self.image_provider}",
         )
 
-    def _search_bing(self, req: ImageRequest) -> ImageResult:
+    def _search_bing(self, req: ContentImageRequest) -> ImageResult:
         """必应图片搜索"""
         if not self.bing_search_key:
             return ImageResult(
-                slide_index=req.slide_index,
-                placeholder_id=req.placeholder_id,
+                template_page_type=req.template_page_type,
+                placeholder_type=req.placeholder_type,
                 success=False,
                 error="Bing search key not configured",
             )
@@ -148,8 +136,8 @@ class ImageHandler:
                 img_response = requests.get(image_url, timeout=10)
                 if img_response.status_code == 200:
                     return ImageResult(
-                        slide_index=req.slide_index,
-                        placeholder_id=req.placeholder_id,
+                        template_page_type=req.template_page_type,
+                        placeholder_type=req.placeholder_type,
                         success=True,
                         image_url=image_url,
                         image_data=img_response.content,
@@ -157,26 +145,26 @@ class ImageHandler:
                     )
 
             return ImageResult(
-                slide_index=req.slide_index,
-                placeholder_id=req.placeholder_id,
+                template_page_type=req.template_page_type,
+                placeholder_type=req.placeholder_type,
                 success=False,
                 error="No search results",
             )
 
         except Exception as e:
             return ImageResult(
-                slide_index=req.slide_index,
-                placeholder_id=req.placeholder_id,
+                template_page_type=req.template_page_type,
+                placeholder_type=req.placeholder_type,
                 success=False,
                 error=f"Search failed: {str(e)}",
             )
 
-    def _search_tavily(self, req: ImageRequest) -> ImageResult:
+    def _search_tavily(self, req: ContentImageRequest) -> ImageResult:
         """Tavily 搜索图片"""
         if not self.tavily_api_key:
             return ImageResult(
-                slide_index=req.slide_index,
-                placeholder_id=req.placeholder_id,
+                template_page_type=req.template_page_type,
+                placeholder_type=req.placeholder_type,
                 success=False,
                 error="Tavily API key not configured",
             )
@@ -208,8 +196,8 @@ class ImageHandler:
                     img_response = requests.get(image_url, timeout=10)
                     if img_response.status_code == 200:
                         return ImageResult(
-                            slide_index=req.slide_index,
-                            placeholder_id=req.placeholder_id,
+                            template_page_type=req.template_page_type,
+                            placeholder_type=req.placeholder_type,
                             success=True,
                             image_url=image_url,
                             image_data=img_response.content,
@@ -217,26 +205,26 @@ class ImageHandler:
                         )
 
             return ImageResult(
-                slide_index=req.slide_index,
-                placeholder_id=req.placeholder_id,
+                template_page_type=req.template_page_type,
+                placeholder_type=req.placeholder_type,
                 success=False,
                 error="No image results from Tavily",
             )
 
         except Exception as e:
             return ImageResult(
-                slide_index=req.slide_index,
-                placeholder_id=req.placeholder_id,
+                template_page_type=req.template_page_type,
+                placeholder_type=req.placeholder_type,
                 success=False,
                 error=f"Tavily search failed: {str(e)}",
             )
 
-    def _search_bocha(self, req: ImageRequest) -> ImageResult:
+    def _search_bocha(self, req: ContentImageRequest) -> ImageResult:
         """博查 AI 搜索图片"""
         if not self.bocha_api_key:
             return ImageResult(
-                slide_index=req.slide_index,
-                placeholder_id=req.placeholder_id,
+                template_page_type=req.template_page_type,
+                placeholder_type=req.placeholder_type,
                 success=False,
                 error="Bocha API key not configured",
             )
@@ -261,6 +249,7 @@ class ImageHandler:
             # 博搜索返回结果中查找图片
             # 如果没有直接图片链接，尝试从搜索结果中提取
             import re
+            import json
             result_str = json.dumps(result)
             # 查找http(s)链接结尾常见图片格式
             image_urls = re.findall(r'https?://[^\s]+?\.(jpg|jpeg|png|gif|webp)', result_str, re.IGNORECASE)
@@ -269,8 +258,8 @@ class ImageHandler:
                 img_response = requests.get(image_url, timeout=10)
                 if img_response.status_code == 200:
                     return ImageResult(
-                        slide_index=req.slide_index,
-                        placeholder_id=req.placeholder_id,
+                        template_page_type=req.template_page_type,
+                        placeholder_type=req.placeholder_type,
                         success=True,
                         image_url=image_url,
                         image_data=img_response.content,
@@ -278,26 +267,26 @@ class ImageHandler:
                     )
 
             return ImageResult(
-                slide_index=req.slide_index,
-                placeholder_id=req.placeholder_id,
+                template_page_type=req.template_page_type,
+                placeholder_type=req.placeholder_type,
                 success=False,
                 error="No image results from Bocha",
             )
 
         except Exception as e:
             return ImageResult(
-                slide_index=req.slide_index,
-                placeholder_id=req.placeholder_id,
+                template_page_type=req.template_page_type,
+                placeholder_type=req.placeholder_type,
                 success=False,
                 error=f"Bocha search failed: {str(e)}",
             )
 
-    def _generate_image(self, req: ImageRequest) -> ImageResult:
+    def _generate_image(self, req: ContentImageRequest) -> ImageResult:
         """DALL·E 生成图片"""
         if not self.openai_client:
             return ImageResult(
-                slide_index=req.slide_index,
-                placeholder_id=req.placeholder_id,
+                template_page_type=req.template_page_type,
+                placeholder_type=req.placeholder_type,
                 success=False,
                 error="OpenAI not configured",
             )
@@ -331,8 +320,8 @@ class ImageHandler:
                 img_response = requests.get(image_url, timeout=30)
                 if img_response.status_code == 200:
                     return ImageResult(
-                        slide_index=req.slide_index,
-                        placeholder_id=req.placeholder_id,
+                        template_page_type=req.template_page_type,
+                        placeholder_type=req.placeholder_type,
                         success=True,
                         image_url=image_url,
                         image_data=img_response.content,
@@ -340,16 +329,16 @@ class ImageHandler:
                     )
 
             return ImageResult(
-                slide_index=req.slide_index,
-                placeholder_id=req.placeholder_id,
+                template_page_type=req.template_page_type,
+                placeholder_type=req.placeholder_type,
                 success=False,
                 error="No generation result",
             )
 
         except Exception as e:
             return ImageResult(
-                slide_index=req.slide_index,
-                placeholder_id=req.placeholder_id,
+                template_page_type=req.template_page_type,
+                placeholder_type=req.placeholder_type,
                 success=False,
                 error=f"Generation failed: {str(e)}",
             )
